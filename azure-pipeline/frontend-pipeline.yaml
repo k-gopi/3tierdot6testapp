@@ -1,52 +1,77 @@
-trigger:
-- main
-
-pool:
-  vmImage: 'ubuntu-latest'
+trigger: none
 
 variables:
-  imageName: 'nginx-frontend'
-  acrName: '<your-acr-name>.azurecr.io'
-  dockerHubRepo: '<your-dockerhub-username>/nginx-frontend'
+  buildConfiguration: 'Release'
+  imageName: 'testnginxfrontend'
+  imageTag: '$(Build.BuildId)'
+  acrLoginServer: 'acr1registry.azurecr.io'
+  acrRepo: 'acr1registry.azurecr.io/testnginxfrontend'
+  # Secret variables acr-username and acr-password should be defined in Azure DevOps UI
 
-steps:
-# Optional: run HTML lint or tests if needed
+stages:
+- stage: DockerBuildPush
+  displayName: 'Docker Build and Push to ACR'
+  jobs:
+  - job: DockerPush
+    displayName: 'Build Docker image and push to ACR'
+    pool: testpool
+    steps:
+    - task: Docker@2
+      displayName: 'Login to ACR'
+      inputs:
+        command: login
+        containerRegistry: 'acrsc'  # ACR service connection
 
-# Docker build
-- task: Docker@2
-  displayName: 'Build Frontend Docker Image'
-  inputs:
-    command: build
-    Dockerfile: frontend/Dockerfile
-    tags: latest
-    repository: $(imageName)
-    containerRegistry: <your-acr-service-connection>
+    - script: |
+        echo "Building Docker image..."
+        docker build -t $(imageName):$(imageTag) -f frontend/Dockerfile frontend
 
-# Push to Azure ACR
-- task: Docker@2
-  displayName: 'Push to ACR'
-  inputs:
-    command: push
-    repository: $(imageName)
-    tags: latest
-    containerRegistry: <your-acr-service-connection>
+        echo "Tagging image with ACR repo..."
+        docker tag $(imageName):$(imageTag) $(acrRepo):$(imageTag)
 
-# Optional: Push to Docker Hub
-- task: Docker@2
-  displayName: 'Push to Docker Hub'
-  inputs:
-    command: push
-    repository: $(dockerHubRepo)
-    tags: latest
-    containerRegistry: <your-dockerhub-service-connection>
+        echo "Pushing image to ACR..."
+        docker push $(acrRepo):$(imageTag)
+      displayName: 'Build, Tag, and Push Image'
 
-# Deploy to server using SSH
-- task: SSH@0
-  displayName: 'Deploy to Frontend Server'
-  inputs:
-    sshEndpoint: '<your-frontend-ssh-service-connection>'
-    runOptions: 'commands'
-    commands: |
-      docker pull $(acrName)/$(imageName):latest
-      docker stop frontend || true && docker rm frontend || true
-      docker run -d --name frontend -p 80:80 $(acrName)/$(imageName):latest
+- stage: DeployToLinux
+  displayName: 'Deploy from ACR to Linux Server'
+  dependsOn: DockerBuildPush
+  jobs:
+  - job: Deploy
+    displayName: 'SSH Deploy to Linux VM'
+    pool: testpool
+    steps:
+    - task: SSH@0
+      displayName: 'Run Deployment Script on Linux'
+      inputs:
+        sshEndpoint: 'testnginxfrontend'  # SSH service connection to Linux VM
+        runOptions: 'inline'
+        inline: |
+          ACR_USERNAME="$(acr-username)"
+          ACR_PASSWORD="$(acr-password)"
+          ACR_LOGIN_SERVER="$(acrLoginServer)"
+          ACR_REPO="$(acrRepo)"
+          IMAGE_TAG="$(imageTag)"
+          BUILD_CONFIGURATION="$(buildConfiguration)"
+
+          echo "==== ENVIRONMENT DEBUG ===="
+          echo "ACR_USERNAME='$ACR_USERNAME'"
+          echo "ACR_PASSWORD length=${#ACR_PASSWORD}"
+          echo "ACR_LOGIN_SERVER='$ACR_LOGIN_SERVER'"
+          echo "ACR_REPO='$ACR_REPO'"
+          echo "IMAGE_TAG='$IMAGE_TAG'"
+          echo "BUILD_CONFIGURATION='$BUILD_CONFIGURATION'"
+          echo "============================"
+
+          echo "Logging into ACR..."
+          echo "$ACR_PASSWORD" | docker login "$ACR_LOGIN_SERVER" -u "$ACR_USERNAME" --password-stdin
+
+          echo "Stopping and removing old container if exists..."
+          docker stop testnginxfrontend 2>/dev/null || true
+          docker rm testnginxfrontend 2>/dev/null || true
+
+          echo "Pulling latest image..."
+          docker pull "$ACR_REPO:$IMAGE_TAG"
+
+          echo "Running new container..."
+          docker run -d --name testnginxfrontend -p 8080:80 "$ACR_REPO:$IMAGE_TAG"
