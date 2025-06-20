@@ -1,0 +1,81 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  buildConfiguration: 'Release'
+  imageName: 'dotnet-backend'
+  acrName: '<your-acr-name>.azurecr.io'
+  dockerHubRepo: '<your-dockerhub-username>/dotnet-backend'
+
+steps:
+
+# ✅ Use .NET 6 SDK
+- task: UseDotNet@2
+  inputs:
+    packageType: 'sdk'
+    version: '6.0.x'
+
+# ✅ Restore
+- script: |
+    dotnet restore backend/backend.csproj
+  displayName: 'Restore'
+
+# ✅ Build
+- script: |
+    dotnet build backend/backend.csproj --configuration $(buildConfiguration)
+  displayName: 'Build'
+
+# ✅ Test
+- script: |
+    dotnet test backend/backend.csproj --no-restore --verbosity normal
+  displayName: 'Test'
+
+# ✅ Publish
+- script: |
+    dotnet publish backend/backend.csproj -c $(buildConfiguration) -o $(Build.ArtifactStagingDirectory)/publish
+  displayName: 'Publish'
+
+# ✅ Docker Build
+- task: Docker@2
+  displayName: 'Docker Build Image'
+  inputs:
+    command: build
+    Dockerfile: backend/Dockerfile
+    tags: latest
+    repository: $(imageName)
+    containerRegistry: <your-acr-service-connection>
+
+# ✅ Push to Azure Container Registry (ACR)
+- task: Docker@2
+  displayName: 'Push to ACR'
+  inputs:
+    command: push
+    repository: $(imageName)
+    tags: latest
+    containerRegistry: <your-acr-service-connection>
+
+# ✅ Push to Docker Hub (optional)
+- task: Docker@2
+  displayName: 'Push to Docker Hub'
+  inputs:
+    command: push
+    repository: $(dockerHubRepo)
+    tags: latest
+    containerRegistry: <your-dockerhub-service-connection>
+
+# ✅ Deploy to App Server via SSH
+- task: SSH@0
+  displayName: 'Deploy to Backend Server'
+  inputs:
+    sshEndpoint: '<your-backend-ssh-service-connection>'
+    runOptions: 'commands'
+    commands: |
+      docker pull $(acrName)/$(imageName):latest
+      docker stop backend || true && docker rm backend || true
+      docker run -d --name backend -p 5000:80 --restart always \
+        -e ASPNETCORE_ENVIRONMENT=Production \
+        -e ConnectionStrings__DefaultConnection="server=database;port=3306;database=appdb;user=root;password=root;" \
+        $(acrName)/$(imageName):latest

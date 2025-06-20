@@ -1,0 +1,52 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  imageName: 'nginx-frontend'
+  acrName: '<your-acr-name>.azurecr.io'
+  dockerHubRepo: '<your-dockerhub-username>/nginx-frontend'
+
+steps:
+# Optional: run HTML lint or tests if needed
+
+# Docker build
+- task: Docker@2
+  displayName: 'Build Frontend Docker Image'
+  inputs:
+    command: build
+    Dockerfile: frontend/Dockerfile
+    tags: latest
+    repository: $(imageName)
+    containerRegistry: <your-acr-service-connection>
+
+# Push to Azure ACR
+- task: Docker@2
+  displayName: 'Push to ACR'
+  inputs:
+    command: push
+    repository: $(imageName)
+    tags: latest
+    containerRegistry: <your-acr-service-connection>
+
+# Optional: Push to Docker Hub
+- task: Docker@2
+  displayName: 'Push to Docker Hub'
+  inputs:
+    command: push
+    repository: $(dockerHubRepo)
+    tags: latest
+    containerRegistry: <your-dockerhub-service-connection>
+
+# Deploy to server using SSH
+- task: SSH@0
+  displayName: 'Deploy to Frontend Server'
+  inputs:
+    sshEndpoint: '<your-frontend-ssh-service-connection>'
+    runOptions: 'commands'
+    commands: |
+      docker pull $(acrName)/$(imageName):latest
+      docker stop frontend || true && docker rm frontend || true
+      docker run -d --name frontend -p 80:80 $(acrName)/$(imageName):latest

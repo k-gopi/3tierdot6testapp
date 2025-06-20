@@ -1,0 +1,57 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  imageName: 'mysql-db'
+  acrName: '<your-acr-name>.azurecr.io'
+  dockerHubRepo: '<your-dockerhub-username>/mysql-db'
+
+steps:
+
+# ✅ Docker Build
+- task: Docker@2
+  displayName: 'Docker Build MySQL Image'
+  inputs:
+    command: build
+    Dockerfile: database/Dockerfile
+    tags: latest
+    repository: $(imageName)
+    containerRegistry: <your-acr-service-connection>
+
+# ✅ Push to Azure Container Registry (ACR)
+- task: Docker@2
+  displayName: 'Push to ACR'
+  inputs:
+    command: push
+    repository: $(imageName)
+    tags: latest
+    containerRegistry: <your-acr-service-connection>
+
+# ✅ Push to Docker Hub (optional)
+- task: Docker@2
+  displayName: 'Push to Docker Hub'
+  inputs:
+    command: push
+    repository: $(dockerHubRepo)
+    tags: latest
+    containerRegistry: <your-dockerhub-service-connection>
+
+# ✅ Deploy to DB Server using SSH
+- task: SSH@0
+  displayName: 'Deploy MySQL Container to DB Server'
+  inputs:
+    sshEndpoint: '<your-db-ssh-service-connection>'
+    runOptions: 'commands'
+    commands: |
+      docker pull $(acrName)/$(imageName):latest
+      docker stop mysql || true && docker rm mysql || true
+      docker run -d --name mysql \
+        -e MYSQL_ROOT_PASSWORD=root \
+        -e MYSQL_DATABASE=appdb \
+        -p 3306:3306 \
+        -v mysql_data:/var/lib/mysql \
+        --restart always \
+        $(acrName)/$(imageName):latest
