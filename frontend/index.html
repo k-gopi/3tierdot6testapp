@@ -14,7 +14,7 @@
   <script>
     document.getElementById('loginForm').addEventListener('submit', async function (e) {
       e.preventDefault();
-      const response = await fetch('http://<backend-ip>:5000/api/user/login', {
+      const response = await fetch('http://10.0.0.5:5000/api/user/login', {  // <--- replaced here
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
